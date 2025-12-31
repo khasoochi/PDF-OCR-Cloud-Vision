@@ -48,10 +48,12 @@ A web-based tool that converts scanned PDFs into searchable PDFs by overlaying O
    pip install -r requirements.txt
    ```
 
-4. Run locally (for testing):
+4. Run the development server:
    ```bash
-   python -m http.server 8000 --directory public
+   python dev_server.py
    ```
+
+5. Open http://localhost:5000 in your browser
 
 ### Getting a Google Cloud Vision API Key
 
@@ -86,6 +88,7 @@ PDF-OCR-Cloud-Vision/
 │   ├── index.html          # Frontend interface
 │   ├── style.css           # Styles
 │   └── script.js           # Frontend logic
+├── dev_server.py           # Local development server
 ├── requirements.txt        # Python dependencies
 ├── vercel.json            # Vercel configuration
 └── README.md

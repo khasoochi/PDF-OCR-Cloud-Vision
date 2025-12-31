@@ -6,3 +6,6 @@ requests>=2.31.0
 
 # Image processing (required by PyMuPDF)
 Pillow>=10.0.0
+
+# Local development server (optional)
+flask>=3.0.0
