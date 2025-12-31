@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF OCR - Make PDFs Searchable</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>PDF OCR</h1>
+            <p class="subtitle">Convert scanned PDFs into searchable documents</p>
+        </header>
+
+        <main>
+            <form id="ocr-form">
+                <!-- API Key Input -->
+                <div class="form-group">
+                    <label for="api-key">Google Cloud Vision API Key</label>
+                    <div class="input-wrapper">
+                        <input
+                            type="password"
+                            id="api-key"
+                            name="api_key"
+                            placeholder="Enter your API key"
+                            required
+                        >
+                        <button type="button" id="toggle-key" class="toggle-btn" aria-label="Toggle API key visibility">
+                            <svg class="eye-icon" viewBox="0 0 24 24" width="20" height="20">
+                                <path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/>
+                            </svg>
+                        </button>
+                    </div>
+                    <small class="hint">
+                        <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener">
+                            Get an API key from Google Cloud Console
+                        </a>
+                    </small>
+                </div>
+
+                <!-- File Upload -->
+                <div class="form-group">
+                    <label for="pdf-file">PDF File</label>
+                    <div
+                        id="drop-zone"
+                        class="drop-zone"
+                        tabindex="0"
+                        role="button"
+                        aria-label="Click or drop a PDF file to upload"
+                    >
+                        <input
+                            type="file"
+                            id="pdf-file"
+                            name="file"
+                            accept=".pdf,application/pdf"
+                            required
+                        >
+                        <div class="drop-zone-content">
+                            <svg class="upload-icon" viewBox="0 0 24 24" width="48" height="48">
+                                <path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM14 13v4h-4v-4H7l5-5 5 5h-3z"/>
+                            </svg>
+                            <p class="drop-text">Drag & drop a PDF here</p>
+                            <p class="drop-text-alt">or click to browse</p>
+                        </div>
+                        <div class="file-info" hidden>
+                            <svg class="file-icon" viewBox="0 0 24 24" width="24" height="24">
+                                <path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/>
+                            </svg>
+                            <span class="file-name"></span>
+                            <button type="button" class="remove-file" aria-label="Remove file">&times;</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Submit Button -->
+                <button type="submit" id="submit-btn" class="submit-btn">
+                    <span class="btn-text">Make PDF Searchable</span>
+                    <span class="btn-loading" hidden>
+                        <svg class="spinner" viewBox="0 0 24 24" width="20" height="20">
+                            <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" fill="none" stroke-dasharray="31.4 31.4" stroke-linecap="round"/>
+                        </svg>
+                        Processing...
+                    </span>
+                </button>
+            </form>
+
+            <!-- Progress Section -->
+            <div id="progress-section" class="progress-section" hidden>
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progress-fill"></div>
+                </div>
+                <p id="progress-text" class="progress-text">Preparing...</p>
+            </div>
+
+            <!-- Result Section -->
+            <div id="result-section" class="result-section" hidden>
+                <div class="success-message">
+                    <svg class="success-icon" viewBox="0 0 24 24" width="48" height="48">
+                        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+                    </svg>
+                    <h2>PDF Ready!</h2>
+                    <p>Your searchable PDF has been created.</p>
+                </div>
+                <a id="download-link" class="download-btn" download>
+                    <svg viewBox="0 0 24 24" width="20" height="20">
+                        <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/>
+                    </svg>
+                    Download Searchable PDF
+                </a>
+                <button type="button" id="process-another" class="secondary-btn">
+                    Process Another PDF
+                </button>
+            </div>
+
+            <!-- Error Section -->
+            <div id="error-section" class="error-section" hidden>
+                <div class="error-message">
+                    <svg class="error-icon" viewBox="0 0 24 24" width="48" height="48">
+                        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
+                    </svg>
+                    <h2>Something went wrong</h2>
+                    <p id="error-text"></p>
+                </div>
+                <button type="button" id="try-again" class="submit-btn">
+                    Try Again
+                </button>
+            </div>
+        </main>
+
+        <footer>
+            <p>
+                Uses <a href="https://cloud.google.com/vision" target="_blank" rel="noopener">Google Cloud Vision API</a> for OCR.
+                Your API key and files are processed securely and not stored.
+            </p>
+        </footer>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>

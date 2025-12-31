@@ -1,0 +1,8 @@
+# PDF manipulation
+PyMuPDF>=1.23.0
+
+# HTTP requests (for Cloud Vision REST API)
+requests>=2.31.0
+
+# Image processing (required by PyMuPDF)
+Pillow>=10.0.0
