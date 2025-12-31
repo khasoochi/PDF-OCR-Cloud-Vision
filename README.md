@@ -50,7 +50,7 @@ A web-based tool that converts scanned PDFs into searchable PDFs by overlaying O
 
 4. Run locally (for testing):
    ```bash
-   python -m http.server 8000 --directory static
+   python -m http.server 8000 --directory public
    ```
 
 ### Getting a Google Cloud Vision API Key
@@ -82,7 +82,7 @@ A web-based tool that converts scanned PDFs into searchable PDFs by overlaying O
 PDF-OCR-Cloud-Vision/
 ├── api/
 │   └── ocr.py              # Serverless function for PDF OCR
-├── static/
+├── public/
 │   ├── index.html          # Frontend interface
 │   ├── style.css           # Styles
 │   └── script.js           # Frontend logic
