@@ -404,16 +404,21 @@ def process_pdf_ocr(pdf_data: bytes, api_key: str) -> bytes:
         input_doc.close()
         raise ValueError('PDF has no pages')
 
+    # Limit pages to prevent timeout (process max 10 pages)
+    max_pages = min(input_doc.page_count, 10)
+    if input_doc.page_count > 10:
+        print(f"Warning: PDF has {input_doc.page_count} pages, processing only first 10")
+
     # Create output document
     output_doc = fitz.open()
 
     try:
         # Process each page
-        for page_num in range(len(input_doc)):
+        for page_num in range(max_pages):
             page = input_doc[page_num]
 
-            # Render page as image (300 DPI for good OCR quality)
-            dpi = 300
+            # Render page as image (150 DPI - good balance of speed and quality)
+            dpi = 150
             zoom = dpi / 72
             matrix = fitz.Matrix(zoom, zoom)
 
@@ -422,8 +427,8 @@ def process_pdf_ocr(pdf_data: bytes, api_key: str) -> bytes:
             except Exception as e:
                 raise ValueError(f'Failed to render page {page_num + 1}: {str(e)}')
 
-            # Convert to PNG bytes
-            image_bytes = pixmap.tobytes("png")
+            # Convert to JPEG for faster processing (smaller size)
+            image_bytes = pixmap.tobytes("jpeg")
             image_width = pixmap.width
             image_height = pixmap.height
 
@@ -445,11 +450,10 @@ def process_pdf_ocr(pdf_data: bytes, api_key: str) -> bytes:
                 height=page.rect.height
             )
 
-            # Insert the original page as an image (at screen resolution for smaller file)
-            orig_pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2))  # 144 DPI
+            # Insert the original page as an image (use same pixmap, already at good resolution)
             new_page.insert_image(
                 new_page.rect,
-                stream=orig_pixmap.tobytes("png")
+                stream=pixmap.tobytes("jpeg")
             )
 
             # Add invisible text layer
