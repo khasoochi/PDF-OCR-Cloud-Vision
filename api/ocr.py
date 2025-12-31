@@ -6,7 +6,10 @@ with OCR text positioned at exact coordinates.
 """
 
 import base64
+import email
+import email.policy
 import json
+import io
 import re
 import sys
 import traceback
@@ -28,80 +31,53 @@ def load_dependencies():
         requests = _requests
 
 
-def parse_multipart(body: bytes, content_type: str) -> dict:
+def parse_multipart_form(body: bytes, content_type: str) -> dict:
     """
-    Parse multipart form data manually.
+    Parse multipart form data using email module.
 
-    Args:
-        body: Request body bytes
-        content_type: Content-Type header value
-
-    Returns:
-        Dictionary with field names as keys
+    Returns dict with field names as keys.
+    For files: {'filename': str, 'content': bytes}
+    For regular fields: str value
     """
     result = {}
 
-    # Extract boundary from content-type
-    boundary_match = re.search(r'boundary=([^\s;]+)', content_type)
-    if not boundary_match:
-        raise ValueError('No boundary found in Content-Type')
+    # Create a proper MIME message
+    # Add required headers for email parser
+    full_message = b'Content-Type: ' + content_type.encode() + b'\r\n\r\n' + body
 
-    boundary = boundary_match.group(1).strip('"')
-    boundary_bytes = f'--{boundary}'.encode()
+    # Parse using email module
+    msg = email.message_from_bytes(full_message, policy=email.policy.HTTP)
 
-    # Split body by boundary
-    parts = body.split(boundary_bytes)
+    if msg.is_multipart():
+        for part in msg.iter_parts():
+            # Get Content-Disposition header
+            content_disposition = part.get('Content-Disposition', '')
 
-    for part in parts:
-        if not part or part == b'--' or part == b'--\r\n':
-            continue
-
-        # Skip empty parts
-        part = part.strip()
-        if not part or part == b'--':
-            continue
-
-        # Split headers from content
-        try:
-            if b'\r\n\r\n' in part:
-                headers_section, content = part.split(b'\r\n\r\n', 1)
-            elif b'\n\n' in part:
-                headers_section, content = part.split(b'\n\n', 1)
-            else:
+            # Extract field name
+            name_match = re.search(r'name="([^"]+)"', content_disposition)
+            if not name_match:
                 continue
-        except ValueError:
-            continue
 
-        # Remove trailing boundary markers
-        if content.endswith(b'\r\n'):
-            content = content[:-2]
-        if content.endswith(b'--'):
-            content = content[:-2]
-        if content.endswith(b'\r\n'):
-            content = content[:-2]
+            field_name = name_match.group(1)
 
-        # Parse headers
-        headers_text = headers_section.decode('utf-8', errors='ignore')
+            # Check if it's a file
+            filename_match = re.search(r'filename="([^"]*)"', content_disposition)
 
-        # Extract field name
-        name_match = re.search(r'name="([^"]+)"', headers_text)
-        if not name_match:
-            continue
-
-        field_name = name_match.group(1)
-
-        # Check if it's a file
-        filename_match = re.search(r'filename="([^"]*)"', headers_text)
-
-        if filename_match:
-            # It's a file field
-            result[field_name] = {
-                'filename': filename_match.group(1),
-                'content': content
-            }
-        else:
-            # It's a regular field
-            result[field_name] = content.decode('utf-8', errors='ignore').strip()
+            if filename_match:
+                # It's a file
+                content = part.get_payload(decode=True)
+                result[field_name] = {
+                    'filename': filename_match.group(1),
+                    'content': content if content else b''
+                }
+            else:
+                # Regular field
+                payload = part.get_payload(decode=True)
+                if payload:
+                    result[field_name] = payload.decode('utf-8', errors='ignore').strip()
+                else:
+                    # Try getting as string
+                    result[field_name] = str(part.get_payload()).strip()
 
     return result
 
@@ -170,21 +146,22 @@ class handler(BaseHTTPRequestHandler):
 
             # Parse multipart data
             try:
-                form_data = parse_multipart(body, content_type)
+                form_data = parse_multipart_form(body, content_type)
             except Exception as e:
                 self._send_error(400, f'Failed to parse form data: {str(e)}')
                 return
 
-            # Get API key
-            api_key = form_data.get('api_key')
-            if not api_key or (isinstance(api_key, dict)):
-                self._send_error(400, 'API key is required')
+            # Get API key - check multiple possible field names
+            api_key = form_data.get('api_key') or form_data.get('google_api_key') or form_data.get('apiKey')
+            if not api_key or isinstance(api_key, dict):
+                # Return debug info
+                self._send_error(400, f'API key is required. Received fields: {list(form_data.keys())}')
                 return
 
             # Get PDF file
             file_data = form_data.get('file')
             if not file_data or not isinstance(file_data, dict):
-                self._send_error(400, 'PDF file is required')
+                self._send_error(400, f'PDF file is required. Received fields: {list(form_data.keys())}')
                 return
 
             filename = file_data.get('filename', 'document.pdf')
@@ -232,13 +209,6 @@ class handler(BaseHTTPRequestHandler):
 def call_vision_api(image_bytes: bytes, api_key: str) -> dict:
     """
     Call Google Cloud Vision API with an image.
-
-    Args:
-        image_bytes: Image data as bytes
-        api_key: Google Cloud Vision API key
-
-    Returns:
-        API response containing text annotations with bounding boxes
     """
     url = f'https://vision.googleapis.com/v1/images:annotate?key={api_key}'
 
@@ -284,19 +254,7 @@ def call_vision_api(image_bytes: bytes, api_key: str) -> dict:
 
 def extract_text_with_positions(api_response: dict, page_width: float, page_height: float,
                                  image_width: int, image_height: int) -> list:
-    """
-    Extract text and positions from Cloud Vision API response.
-
-    Args:
-        api_response: Response from Cloud Vision API
-        page_width: PDF page width in points
-        page_height: PDF page height in points
-        image_width: Image width in pixels
-        image_height: Image height in pixels
-
-    Returns:
-        List of text blocks with positions
-    """
+    """Extract text and positions from Cloud Vision API response."""
     text_blocks = []
 
     responses = api_response.get('responses', [])
@@ -305,27 +263,21 @@ def extract_text_with_positions(api_response: dict, page_width: float, page_heig
 
     response = responses[0]
 
-    # Check for errors in response
     if 'error' in response:
         error_msg = response['error'].get('message', 'Unknown error')
         raise ValueError(f'Cloud Vision API error: {error_msg}')
 
-    # Get the full text annotation
     full_annotation = response.get('fullTextAnnotation')
     if not full_annotation:
-        # No text found in image
         return text_blocks
 
-    # Calculate scale factors
     scale_x = page_width / image_width
     scale_y = page_height / image_height
 
-    # Process each page (usually just one for images)
     for page in full_annotation.get('pages', []):
         for block in page.get('blocks', []):
             for paragraph in block.get('paragraphs', []):
                 for word in paragraph.get('words', []):
-                    # Extract word text
                     word_text = ''.join(
                         symbol.get('text', '')
                         for symbol in word.get('symbols', [])
@@ -334,11 +286,9 @@ def extract_text_with_positions(api_response: dict, page_width: float, page_heig
                     if not word_text.strip():
                         continue
 
-                    # Get bounding box
                     bounding_box = word.get('boundingBox', {})
                     vertices = bounding_box.get('vertices', [])
 
-                    # Handle normalized vertices if present
                     if not vertices:
                         normalized = bounding_box.get('normalizedVertices', [])
                         if normalized:
@@ -351,7 +301,6 @@ def extract_text_with_positions(api_response: dict, page_width: float, page_heig
                     if len(vertices) < 4:
                         continue
 
-                    # Calculate position (convert from image coords to PDF coords)
                     x_coords = [v.get('x', 0) for v in vertices]
                     y_coords = [v.get('y', 0) for v in vertices]
 
@@ -373,39 +322,24 @@ def extract_text_with_positions(api_response: dict, page_width: float, page_heig
 
 
 def add_text_layer_to_page(page, text_blocks: list):
-    """
-    Add invisible text layer to a PDF page.
-
-    Args:
-        page: PyMuPDF page object
-        text_blocks: List of text blocks with positions
-    """
+    """Add invisible text layer to a PDF page."""
     for block in text_blocks:
         x = block['x']
         y = block['y']
         text = block['text']
         height = block['height']
-
-        # Calculate font size (approximate from height, with reasonable limits)
         font_size = max(4, min(height * 0.85, 72))
 
         try:
-            # Use TextWriter for better control
             tw = fitz.TextWriter(page.rect)
-
-            # Position is baseline, so add height to y
             tw.append(
                 pos=(x, y + height * 0.85),
                 text=text,
                 fontsize=font_size,
                 font=fitz.Font("helv")
             )
-
-            # Write with invisible render mode (3)
             tw.write_text(page, render_mode=3)
-
         except Exception:
-            # Fallback: simple text insertion
             try:
                 page.insert_text(
                     point=(x, y + height * 0.85),
@@ -415,26 +349,14 @@ def add_text_layer_to_page(page, text_blocks: list):
                     render_mode=3
                 )
             except Exception:
-                # Skip this text block if all methods fail
                 pass
 
 
 def process_pdf_ocr(pdf_data: bytes, api_key: str) -> bytes:
-    """
-    Process a PDF file and add OCR text layer.
-
-    Args:
-        pdf_data: Input PDF file as bytes
-        api_key: Google Cloud Vision API key
-
-    Returns:
-        Processed PDF with text layer as bytes
-    """
-    # Validate PDF data
+    """Process a PDF file and add OCR text layer."""
     if not pdf_data.startswith(b'%PDF'):
         raise ValueError('Invalid PDF file')
 
-    # Open the input PDF
     try:
         input_doc = fitz.open(stream=pdf_data, filetype="pdf")
     except Exception as e:
@@ -444,20 +366,14 @@ def process_pdf_ocr(pdf_data: bytes, api_key: str) -> bytes:
         input_doc.close()
         raise ValueError('PDF has no pages')
 
-    # Limit pages to prevent timeout (process max 5 pages for Hobby plan)
     max_pages = min(input_doc.page_count, 5)
-    if input_doc.page_count > 5:
-        print(f"Warning: PDF has {input_doc.page_count} pages, processing only first 5")
 
-    # Create output document
     output_doc = fitz.open()
 
     try:
-        # Process each page
         for page_num in range(max_pages):
             page = input_doc[page_num]
 
-            # Render page as image (150 DPI - good balance of speed and quality)
             dpi = 150
             zoom = dpi / 72
             matrix = fitz.Matrix(zoom, zoom)
@@ -467,15 +383,12 @@ def process_pdf_ocr(pdf_data: bytes, api_key: str) -> bytes:
             except Exception as e:
                 raise ValueError(f'Failed to render page {page_num + 1}: {str(e)}')
 
-            # Convert to JPEG for faster processing (smaller size)
             image_bytes = pixmap.tobytes("jpeg")
             image_width = pixmap.width
             image_height = pixmap.height
 
-            # Call Cloud Vision API
             api_response = call_vision_api(image_bytes, api_key)
 
-            # Extract text with positions
             text_blocks = extract_text_with_positions(
                 api_response,
                 page.rect.width,
@@ -484,26 +397,21 @@ def process_pdf_ocr(pdf_data: bytes, api_key: str) -> bytes:
                 image_height
             )
 
-            # Create new page in output document with same size
             new_page = output_doc.new_page(
                 width=page.rect.width,
                 height=page.rect.height
             )
 
-            # Insert the original page as an image (use same pixmap, already at good resolution)
             new_page.insert_image(
                 new_page.rect,
                 stream=pixmap.tobytes("jpeg")
             )
 
-            # Add invisible text layer
             add_text_layer_to_page(new_page, text_blocks)
 
-        # Save to bytes with optimization
         output_bytes = output_doc.tobytes(deflate=True, garbage=4)
 
     finally:
-        # Cleanup
         input_doc.close()
         output_doc.close()
 
