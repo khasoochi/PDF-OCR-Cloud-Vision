@@ -6,10 +6,7 @@ with OCR text positioned at exact coordinates.
 """
 
 import base64
-import email
-import email.policy
 import json
-import io
 import re
 import sys
 import traceback
@@ -33,7 +30,7 @@ def load_dependencies():
 
 def parse_multipart_form(body: bytes, content_type: str) -> dict:
     """
-    Parse multipart form data using email module.
+    Parse multipart form data manually (more reliable than email module).
 
     Returns dict with field names as keys.
     For files: {'filename': str, 'content': bytes}
@@ -41,43 +38,76 @@ def parse_multipart_form(body: bytes, content_type: str) -> dict:
     """
     result = {}
 
-    # Create a proper MIME message
-    # Add required headers for email parser
-    full_message = b'Content-Type: ' + content_type.encode() + b'\r\n\r\n' + body
+    # Extract boundary from content-type
+    boundary_match = re.search(r'boundary=([^\s;]+)', content_type)
+    if not boundary_match:
+        raise ValueError('No boundary found in Content-Type')
 
-    # Parse using email module
-    msg = email.message_from_bytes(full_message, policy=email.policy.HTTP)
+    boundary = boundary_match.group(1).strip('"')
 
-    if msg.is_multipart():
-        for part in msg.iter_parts():
-            # Get Content-Disposition header
-            content_disposition = part.get('Content-Disposition', '')
+    # The actual boundary in the body is prefixed with --
+    delimiter = b'--' + boundary.encode()
 
-            # Extract field name
-            name_match = re.search(r'name="([^"]+)"', content_disposition)
-            if not name_match:
+    # Split body by boundary
+    parts = body.split(delimiter)
+
+    for part in parts:
+        # Skip empty parts and closing boundary
+        if not part or part.strip() == b'' or part.strip() == b'--':
+            continue
+
+        # Remove leading \r\n if present
+        if part.startswith(b'\r\n'):
+            part = part[2:]
+        elif part.startswith(b'\n'):
+            part = part[1:]
+
+        # Skip closing boundary marker
+        if part.strip() == b'--' or part.startswith(b'--'):
+            continue
+
+        # Find the header/body separator
+        separator_pos = part.find(b'\r\n\r\n')
+        if separator_pos == -1:
+            separator_pos = part.find(b'\n\n')
+            if separator_pos == -1:
                 continue
+            header_end = separator_pos
+            body_start = separator_pos + 2
+        else:
+            header_end = separator_pos
+            body_start = separator_pos + 4
 
-            field_name = name_match.group(1)
+        headers_raw = part[:header_end].decode('utf-8', errors='ignore')
+        content = part[body_start:]
 
-            # Check if it's a file
-            filename_match = re.search(r'filename="([^"]*)"', content_disposition)
+        # Remove trailing \r\n or boundary markers from content
+        if content.endswith(b'\r\n'):
+            content = content[:-2]
+        if content.endswith(b'\n'):
+            content = content[:-1]
 
-            if filename_match:
-                # It's a file
-                content = part.get_payload(decode=True)
-                result[field_name] = {
-                    'filename': filename_match.group(1),
-                    'content': content if content else b''
-                }
-            else:
-                # Regular field
-                payload = part.get_payload(decode=True)
-                if payload:
-                    result[field_name] = payload.decode('utf-8', errors='ignore').strip()
-                else:
-                    # Try getting as string
-                    result[field_name] = str(part.get_payload()).strip()
+        # Extract field name from Content-Disposition header
+        name_match = re.search(r'name="([^"]+)"', headers_raw)
+        if not name_match:
+            # Try without quotes
+            name_match = re.search(r'name=([^\s;]+)', headers_raw)
+        if not name_match:
+            continue
+
+        field_name = name_match.group(1)
+
+        # Check if it's a file (has filename)
+        filename_match = re.search(r'filename="([^"]*)"', headers_raw)
+
+        if filename_match:
+            result[field_name] = {
+                'filename': filename_match.group(1),
+                'content': content
+            }
+        else:
+            # Regular text field
+            result[field_name] = content.decode('utf-8', errors='ignore').strip()
 
     return result
 

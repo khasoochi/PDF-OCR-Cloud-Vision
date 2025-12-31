@@ -171,8 +171,8 @@
         updateProgress(10, 'Uploading PDF...');
 
         const formData = new FormData();
-        formData.append('file', file);
         formData.append('api_key', apiKey);
+        formData.append('file', file);
 
         updateProgress(20, 'Processing with OCR...');
 
