@@ -6,14 +6,26 @@ with OCR text positioned at exact coordinates.
 """
 
 import base64
-import io
 import json
 import re
+import sys
 import traceback
 from http.server import BaseHTTPRequestHandler
 
-import fitz  # PyMuPDF
-import requests
+# Lazy imports to catch errors
+fitz = None
+requests = None
+
+
+def load_dependencies():
+    """Load dependencies lazily to catch import errors."""
+    global fitz, requests
+    if fitz is None:
+        import fitz as _fitz
+        fitz = _fitz
+    if requests is None:
+        import requests as _requests
+        requests = _requests
 
 
 def parse_multipart(body: bytes, content_type: str) -> dict:
@@ -101,11 +113,28 @@ class handler(BaseHTTPRequestHandler):
         """Override to suppress default logging."""
         pass
 
+    def do_GET(self):
+        """Health check endpoint."""
+        try:
+            load_dependencies()
+            status = {
+                'status': 'ok',
+                'python_version': sys.version,
+                'fitz_version': fitz.version if fitz else 'not loaded'
+            }
+            self._send_json(200, status)
+        except Exception as e:
+            self._send_json(500, {
+                'status': 'error',
+                'error': str(e),
+                'traceback': traceback.format_exc()
+            })
+
     def do_OPTIONS(self):
         """Handle CORS preflight requests."""
         self.send_response(200)
         self.send_header('Access-Control-Allow-Origin', '*')
-        self.send_header('Access-Control-Allow-Methods', 'POST, OPTIONS')
+        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
         self.send_header('Access-Control-Allow-Headers', 'Content-Type')
         self.send_header('Access-Control-Max-Age', '86400')
         self.end_headers()
@@ -113,6 +142,13 @@ class handler(BaseHTTPRequestHandler):
     def do_POST(self):
         """Handle PDF OCR requests."""
         try:
+            # Load dependencies first
+            try:
+                load_dependencies()
+            except ImportError as e:
+                self._send_error(500, f'Failed to load dependencies: {str(e)}')
+                return
+
             # Get content type
             content_type = self.headers.get('Content-Type', '')
 
@@ -126,8 +162,8 @@ class handler(BaseHTTPRequestHandler):
                 self._send_error(400, 'Empty request body')
                 return
 
-            if content_length > 50 * 1024 * 1024:  # 50MB limit
-                self._send_error(400, 'File too large (max 50MB)')
+            if content_length > 10 * 1024 * 1024:  # 10MB limit for Hobby plan
+                self._send_error(400, 'File too large (max 10MB)')
                 return
 
             body = self.rfile.read(content_length)
@@ -178,15 +214,19 @@ class handler(BaseHTTPRequestHandler):
             print(f"Error processing PDF: {error_msg}")
             self._send_error(500, f'Processing error: {str(e)}')
 
-    def _send_error(self, status_code: int, message: str):
-        """Send JSON error response."""
-        response = json.dumps({'error': message}).encode()
+    def _send_json(self, status_code: int, data: dict):
+        """Send JSON response."""
+        response = json.dumps(data).encode()
         self.send_response(status_code)
         self.send_header('Access-Control-Allow-Origin', '*')
         self.send_header('Content-Type', 'application/json')
         self.send_header('Content-Length', str(len(response)))
         self.end_headers()
         self.wfile.write(response)
+
+    def _send_error(self, status_code: int, message: str):
+        """Send JSON error response."""
+        self._send_json(status_code, {'error': message})
 
 
 def call_vision_api(image_bytes: bytes, api_key: str) -> dict:
@@ -219,7 +259,7 @@ def call_vision_api(image_bytes: bytes, api_key: str) -> dict:
 
     # Make API call with timeout
     try:
-        response = requests.post(url, json=payload, timeout=120)
+        response = requests.post(url, json=payload, timeout=55)
     except requests.exceptions.Timeout:
         raise ValueError('Cloud Vision API request timed out')
     except requests.exceptions.RequestException as e:
@@ -235,7 +275,7 @@ def call_vision_api(image_bytes: bytes, api_key: str) -> dict:
         try:
             error_data = response.json()
             error_msg = error_data.get('error', {}).get('message', 'Unknown error')
-        except:
+        except Exception:
             error_msg = f'HTTP {response.status_code}'
         raise ValueError(f'Cloud Vision API error: {error_msg}')
 
@@ -404,10 +444,10 @@ def process_pdf_ocr(pdf_data: bytes, api_key: str) -> bytes:
         input_doc.close()
         raise ValueError('PDF has no pages')
 
-    # Limit pages to prevent timeout (process max 10 pages)
-    max_pages = min(input_doc.page_count, 10)
-    if input_doc.page_count > 10:
-        print(f"Warning: PDF has {input_doc.page_count} pages, processing only first 10")
+    # Limit pages to prevent timeout (process max 5 pages for Hobby plan)
+    max_pages = min(input_doc.page_count, 5)
+    if input_doc.page_count > 5:
+        print(f"Warning: PDF has {input_doc.page_count} pages, processing only first 5")
 
     # Create output document
     output_doc = fitz.open()
